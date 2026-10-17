@@ -14,9 +14,22 @@ namespace CodexLimits {
         public string Status;
         public int Elements,Permissions,Models;
         public bool VoiceActive,TextReference;
+        public bool NeedsRecheck,ConfirmedHidden;
         public Rectangle LeftReference,RightReference;
         public AutomationElement PermissionElement,ModelElement;
         public Anchor Copy(){return (Anchor)MemberwiseClone();}
+    }
+    public class AnchorStability {
+        Anchor lastValid;
+        DateTimeOffset lastConfirmed;
+        public Anchor Resolve(Anchor observed,DateTimeOffset now){
+            if(observed.VoiceActive||observed.ConfirmedHidden||observed.Window==IntPtr.Zero){lastValid=null;return observed;}
+            if(!observed.Bounds.IsEmpty&&!observed.NeedsRecheck){lastValid=observed.Copy();lastConfirmed=now;return observed;}
+            if(lastValid!=null&&lastValid.Window==observed.Window&&now-lastConfirmed<TimeSpan.FromSeconds(1)){
+                var retained=lastValid.Copy();retained.NeedsRecheck=true;retained.Status="Повторный поиск элементов интерфейса";return retained;
+            }
+            return observed;
+        }
     }
     public static class Native {
         class Reference {public AutomationElement Element;public Rectangle Bounds;public bool Text;}
@@ -57,18 +70,19 @@ namespace CodexLimits {
         static bool IsModel(string n) {
             return n!=null&&n.Length<160&&(n.StartsWith("GPT-",StringComparison.OrdinalIgnoreCase)||n.StartsWith("Выбрать модель",StringComparison.OrdinalIgnoreCase)||n.StartsWith("Select model",StringComparison.OrdinalIgnoreCase));
         }
-        public static Anchor Refresh(Anchor previous) {
+        public static Anchor Refresh(Anchor previous,Func<Anchor> reacquire=null) {
+            Func<Anchor> retry=reacquire??Locate;
             var anchor=previous.Copy();anchor.Bounds=Rectangle.Empty;
             try {
-                if(anchor.ModelElement==null||anchor.PermissionElement==null){anchor.Status="refresh: missing references";return anchor;}
+                if(anchor.ModelElement==null||anchor.PermissionElement==null)return retry();
                 var left=anchor.PermissionElement.Current;var right=anchor.ModelElement.Current;
-                if(left.IsOffscreen||right.IsOffscreen){anchor.Status="refresh: offscreen";return anchor;}
-                if(!IsPermission(left.Name)||!IsModel(right.Name)){anchor.Status="refresh: changed names";return anchor;}
+                if(left.IsOffscreen||right.IsOffscreen||!IsPermission(left.Name)||!IsModel(right.Name))return retry();
                 anchor.LeftReference=ToRectangle(left.BoundingRectangle);anchor.RightReference=ToRectangle(right.BoundingRectangle);
                 anchor.Scale=Placement.InferScale(anchor.RightReference.Height,anchor.TextReference,GetDpiForWindow(anchor.Window)/96d);
                 anchor.Bounds=Placement.VisibleBadge(anchor.LeftReference,anchor.RightReference,anchor.Scale,anchor.VoiceActive);
+                if(anchor.Bounds.IsEmpty)return retry();
                 RECT rect;if(GetWindowRect(anchor.Window,out rect))anchor.HostBounds=rect.Rectangle;
-            }catch(ElementNotAvailableException) {anchor.Status="refresh: element unavailable";}catch(COMException e) {anchor.Status="refresh: COM "+e.ErrorCode;}catch(InvalidOperationException e) {anchor.Status="refresh: "+e.Message;}
+            }catch(ElementNotAvailableException) {return retry();}catch(COMException) {return retry();}catch(InvalidOperationException) {return retry();}
             return anchor;
         }
         public static Anchor Locate() {
@@ -99,10 +113,11 @@ namespace CodexLimits {
                         if(IsModel(n))models.Add(new Reference {Element=button,Bounds=bounds,Text=current.ControlType==ControlType.Text});
                     }
                     anchor.Permissions=permissions.Count;anchor.Models=models.Count;
-                    if(anchor.VoiceActive){anchor.Status="Диктовка — индикатор скрыт";return anchor;}
+                    if(anchor.VoiceActive){anchor.ConfirmedHidden=true;anchor.Status="Диктовка — индикатор скрыт";return anchor;}
                     permissions.Sort((a,b)=>a.Text==b.Text?b.Bounds.Top.CompareTo(a.Bounds.Top):a.Text?-1:1);
                     models.Sort((a,b)=>a.Text==b.Text?b.Bounds.Top.CompareTo(a.Bounds.Top):a.Text?-1:1);
                     foreach (var left in permissions) foreach (var right in models) {
+                        if(Math.Abs(left.Bounds.Top+left.Bounds.Height/2-right.Bounds.Top-right.Bounds.Height/2)>24*scale||right.Bounds.Left<left.Bounds.Right||right.Bounds.Height>128*scale)continue;
                         double effectiveScale=Placement.InferScale(right.Bounds.Height,right.Text,scale);
                         var bounds=Placement.VisibleBadge(left.Bounds,right.Bounds,effectiveScale,anchor.VoiceActive);
                         if (!bounds.IsEmpty) {
@@ -110,11 +125,11 @@ namespace CodexLimits {
                             anchor.PermissionElement=left.Element;anchor.ModelElement=right.Element;anchor.LeftReference=left.Bounds;anchor.RightReference=right.Bounds;anchor.TextReference=right.Text;return anchor;
                         }
                     }
-                    if (permissions.Count>0 && models.Count>0) { anchor.Status="В строке недостаточно места"; return anchor; }
+                    if (permissions.Count>0 && models.Count>0)anchor.Status="Проверяем геометрию строки ввода";
                 } catch (ElementNotAvailableException) { }
                   catch (COMException) { }
                   catch (InvalidOperationException) { }
-                // Dictation replaces the normal footer. Never float over a replacement bar.
+                anchor.NeedsRecheck=true;
                 return anchor;
             }
             return new Anchor { Status="Окно Codex не найдено" };

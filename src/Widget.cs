@@ -44,6 +44,7 @@ namespace CodexLimits {
         readonly Timer clock=new Timer { Interval=250 };
         readonly ToolTip tooltip=new ToolTip { InitialDelay=250, ReshowDelay=100,AutoPopDelay=15000 };
         readonly WidgetSettings settings;
+        readonly AnchorStability anchorStability=new AnchorStability();
         readonly bool preview;
         NotifyIcon tray; ContextMenuStrip menu; DetailsForm details;
         Anchor anchor; bool finding,refreshing,closing,dragging,paused;
@@ -111,14 +112,14 @@ namespace CodexLimits {
             if(Program.QuitRequest!=null&&Program.QuitRequest.WaitOne(0)) {Close();return;}
             if(Program.ShowRequest!=null&&Program.ShowRequest.WaitOne(0))ToggleDetails();
             if(DateTime.UtcNow>=nextRefresh && !refreshing) RefreshLimits();
-            if(DateTime.UtcNow>=nextAnchor && !finding) {
+            if((DateTime.UtcNow>=nextAnchor||(anchor!=null&&anchor.NeedsRecheck)) && !finding) {
                 finding=true; nextAnchor=DateTime.UtcNow.AddSeconds(1);
-                try { var found=await Task.Run(()=>Native.Locate()); if(!closing)anchor=found; }
-                catch(Exception) { anchor=new Anchor {Status="Строка ввода недоступна"}; }
+                try { var found=await Task.Run(()=>Native.Locate()); if(!closing)anchor=anchorStability.Resolve(found,DateTimeOffset.UtcNow); }
+                catch(Exception) { anchor=anchorStability.Resolve(new Anchor {Window=anchor==null?IntPtr.Zero:anchor.Window,NeedsRecheck=true,Status="Строка ввода недоступна"},DateTimeOffset.UtcNow); }
                 finally { finding=false; }
             }
             else if(!finding&&anchor!=null&&anchor.ModelElement!=null) {
-                finding=true;try {var previous=anchor;anchor=await Task.Run(()=>Native.Refresh(previous));}catch(Exception){anchor=new Anchor();}finally{finding=false;}
+                finding=true;try {var previous=anchor;var found=await Task.Run(()=>Native.Refresh(previous));anchor=anchorStability.Resolve(found,DateTimeOffset.UtcNow);}catch(Exception){anchor=anchorStability.Resolve(new Anchor {Window=anchor==null?IntPtr.Zero:anchor.Window,NeedsRecheck=true},DateTimeOffset.UtcNow);}finally{finding=false;}
             }
             if(closing || dragging)return;
             bool ownPopup=details!=null&&!details.IsDisposed&&details.Visible;

@@ -9,3 +9,4 @@ live-limits.json
 *.key
 inspect_ui_assets.py
 probe.py
+dist/

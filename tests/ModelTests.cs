@@ -48,6 +48,35 @@ class ModelTests {
         });
         Test("switching to another app still hides the badge",delegate {Equal(Placement.HostContext(999,266218,1906112,false,false),false);});
         Test("missing host never authorizes showing badge",delegate {Equal(Placement.HostContext(1906112,0,1906112,true,true),false);});
+        Test("temporary UI tree replacement preserves confirmed placement",delegate {
+            var memory=new AnchorStability();var now=DateTimeOffset.UtcNow;var bounds=new Rectangle(200,100,280,26);
+            memory.Resolve(new Anchor {Window=new IntPtr(1),Bounds=bounds,Exact=true},now);
+            Equal(memory.Resolve(new Anchor {Window=new IntPtr(1),NeedsRecheck=true},now.AddMilliseconds(250)).Bounds,bounds);
+            Equal(memory.Resolve(new Anchor {Window=new IntPtr(1),NeedsRecheck=true},now.AddMilliseconds(500)).Bounds,bounds);
+        });
+        Test("persistent footer loss eventually hides rather than floating",delegate {
+            var memory=new AnchorStability();var now=DateTimeOffset.UtcNow;
+            memory.Resolve(new Anchor {Window=new IntPtr(1),Bounds=new Rectangle(200,100,280,26)},now);
+            Equal(memory.Resolve(new Anchor {Window=new IntPtr(1),NeedsRecheck=true},now.AddMilliseconds(1200)).Bounds,Rectangle.Empty);
+        });
+        Test("dictation immediately clears remembered placement",delegate {
+            var memory=new AnchorStability();var now=DateTimeOffset.UtcNow;
+            memory.Resolve(new Anchor {Window=new IntPtr(1),Bounds=new Rectangle(200,100,280,26)},now);
+            Equal(memory.Resolve(new Anchor {Window=new IntPtr(1),VoiceActive=true},now.AddMilliseconds(10)).Bounds,Rectangle.Empty);
+            Equal(memory.Resolve(new Anchor {Window=new IntPtr(1),NeedsRecheck=true},now.AddMilliseconds(100)).Bounds,Rectangle.Empty);
+        });
+        Test("another host cannot inherit a remembered location",delegate {
+            var memory=new AnchorStability();var now=DateTimeOffset.UtcNow;
+            memory.Resolve(new Anchor {Window=new IntPtr(1),Bounds=new Rectangle(200,100,280,26)},now);
+            Equal(memory.Resolve(new Anchor {Window=new IntPtr(2),NeedsRecheck=true},now.AddMilliseconds(10)).Bounds,Rectangle.Empty);
+        });
+        Test("stale UI references are reacquired before changing visibility",delegate {
+            var restored=new Anchor {Window=new IntPtr(1),Bounds=new Rectangle(200,100,280,26)};
+            Equal(Native.Refresh(new Anchor {Window=new IntPtr(1)},()=>restored).Bounds,restored.Bounds);
+        });
+        Test("reacquiring a dictation footer never reuses the old badge",delegate {
+            Equal(Native.Refresh(new Anchor {Window=new IntPtr(1)},()=>new Anchor {VoiceActive=true}).VoiceActive,true);
+        });
         Console.WriteLine(count + " checks, " + failures + " failures");
         Environment.ExitCode = failures == 0 ? 0 : 1;
     }
