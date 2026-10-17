@@ -46,7 +46,7 @@ class ModelTests {
         Test("temporary focus on badge never creates hide-show oscillation",delegate {
             foreach(long foreground in new long[]{266218,1906112,266218,1906112,266218})Equal(Placement.HostContext(foreground,266218,1906112,false,false),true);
         });
-        Test("switching to another app still hides the badge",delegate {Equal(Placement.HostContext(999,266218,1906112,false,false),false);});
+        Test("foreground diagnostic distinguishes another app",delegate {Equal(Placement.HostContext(999,266218,1906112,false,false),false);});
         Test("missing host never authorizes showing badge",delegate {Equal(Placement.HostContext(1906112,0,1906112,true,true),false);});
         Test("temporary UI tree replacement preserves confirmed placement",delegate {
             var memory=new AnchorStability();var now=DateTimeOffset.UtcNow;var bounds=new Rectangle(200,100,280,26);
@@ -69,6 +69,13 @@ class ModelTests {
             var memory=new AnchorStability();var now=DateTimeOffset.UtcNow;
             memory.Resolve(new Anchor {Window=new IntPtr(1),Bounds=new Rectangle(200,100,280,26)},now);
             Equal(memory.Resolve(new Anchor {Window=new IntPtr(2),NeedsRecheck=true},now.AddMilliseconds(10)).Bounds,Rectangle.Empty);
+        });
+        Test("background Codex keeps its indicator until the host is minimized",delegate {
+            Equal(Placement.ShowForHost(123,false,false,false),true);
+            Equal(Placement.ShowForHost(123,true,false,false),false);
+            Equal(Placement.ShowForHost(123,false,true,false),false);
+            Equal(Placement.ShowForHost(123,false,false,true),false);
+            Equal(Placement.ShowForHost(0,false,false,false),false);
         });
         Test("stale UI references are reacquired before changing visibility",delegate {
             var restored=new Anchor {Window=new IntPtr(1),Bounds=new Rectangle(200,100,280,26)};

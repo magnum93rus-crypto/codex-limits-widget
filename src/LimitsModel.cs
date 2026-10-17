@@ -109,6 +109,9 @@ namespace CodexLimits {
         }
     }
     public static class Placement {
+        public static bool ShowForHost(long host,bool minimized,bool paused,bool dictation) {
+            return host!=0&&!minimized&&!paused&&!dictation;
+        }
         public static bool HostContext(long foreground,long host,long badge,bool popup,bool menu) {
             return host!=0&&(foreground==host||foreground==badge||popup||menu);
         }

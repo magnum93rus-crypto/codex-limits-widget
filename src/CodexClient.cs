@@ -10,6 +10,8 @@ using System.Threading.Tasks;
 namespace CodexLimits {
     public sealed class CodexClient : IDisposable {
         Process process;
+        readonly string executable;
+        public CodexClient(string executablePath=null) {executable=executablePath;}
         readonly object writeLock = new object();
         readonly ConcurrentDictionary<int,TaskCompletionSource<Dictionary<string,object>>> pending = new ConcurrentDictionary<int,TaskCompletionSource<Dictionary<string,object>>>();
         int nextId;
@@ -42,7 +44,7 @@ namespace CodexLimits {
         }
         void Connect() {
             Dispose();
-            var info = new ProcessStartInfo(FindExecutable(),"app-server --stdio") {
+            var info = new ProcessStartInfo(executable??FindExecutable(),"app-server --stdio") {
                 UseShellExecute=false, CreateNoWindow=true, RedirectStandardInput=true,
                 RedirectStandardOutput=true, RedirectStandardError=true,
                 StandardOutputEncoding=System.Text.Encoding.UTF8, StandardErrorEncoding=System.Text.Encoding.UTF8,
@@ -74,7 +76,7 @@ namespace CodexLimits {
             try {
                 if (process == null || process.HasExited) Connect();
                 return Snapshot.Parse(Json.Serializer.Serialize(Request("account/rateLimits/read",null)));
-            } catch { Dispose(); throw; }
+            } finally { Dispose(); } // Do not keep an app-server in memory between minute-long refreshes.
         }
         public void Dispose() {
             var current = process; process=null; if (current == null) return;

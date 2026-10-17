@@ -44,10 +44,10 @@ namespace CodexLimits {
         readonly Timer clock=new Timer { Interval=250 };
         readonly ToolTip tooltip=new ToolTip { InitialDelay=250, ReshowDelay=100,AutoPopDelay=15000 };
         readonly WidgetSettings settings;
-        readonly AnchorStability anchorStability=new AnchorStability();
+        AnchorTracker tracker;
         readonly bool preview;
         NotifyIcon tray; ContextMenuStrip menu; DetailsForm details;
-        Anchor anchor; bool finding,refreshing,closing,dragging,paused;
+        Anchor anchor; bool refreshing,closing,dragging,paused;
         Point dragStart,dragOrigin; bool moved;
         DateTime nextAnchor=DateTime.MinValue,nextRefresh=DateTime.MinValue;
         public Snapshot Data;
@@ -76,10 +76,11 @@ namespace CodexLimits {
         }
         public Widget(bool previewMode) {
             preview=previewMode; settings=WidgetSettings.Load();
-            FormBorderStyle=FormBorderStyle.None; ShowInTaskbar=false; TopMost=true; StartPosition=FormStartPosition.Manual;
+            FormBorderStyle=FormBorderStyle.None; ShowInTaskbar=false; TopMost=false; StartPosition=FormStartPosition.Manual;
             AutoScaleMode=AutoScaleMode.None; Size=new Size(280,26); BackColor=Color.Black;
             DoubleBuffered=true; Cursor=Cursors.Hand; Text="Codex Limits"; AccessibleName="Лимиты Codex"; AccessibleRole=AccessibleRole.PushButton;
             if (preview) return;
+            tracker=new AnchorTracker();
             menu=new ContextMenuStrip();
             menu.Items.Add("Подробнее",null,delegate { ToggleDetails(); });
             menu.Items.Add("Обновить сейчас",null,delegate { RefreshLimits(); });
@@ -104,23 +105,16 @@ namespace CodexLimits {
                 if(moved) { settings.OffsetX+=Location.X-dragOrigin.X;settings.OffsetY+=Location.Y-dragOrigin.Y;settings.Save(); }
                 else ToggleDetails();
             };
-            FormClosing += delegate { closing=true;clock.Stop();if(tray!=null)tray.Dispose();if(details!=null)details.Close();client.Dispose(); };
+            FormClosing += delegate { closing=true;clock.Stop();tracker.Dispose();if(tray!=null)tray.Dispose();if(details!=null)details.Close();client.Dispose(); };
             FormClosed += delegate { Application.ExitThread(); };
         }
-        async void Tick(object sender,EventArgs e) {
+        void Tick(object sender,EventArgs e) {
             if(closing)return;
             if(Program.QuitRequest!=null&&Program.QuitRequest.WaitOne(0)) {Close();return;}
             if(Program.ShowRequest!=null&&Program.ShowRequest.WaitOne(0))ToggleDetails();
             if(DateTime.UtcNow>=nextRefresh && !refreshing) RefreshLimits();
-            if((DateTime.UtcNow>=nextAnchor||(anchor!=null&&anchor.NeedsRecheck)) && !finding) {
-                finding=true; nextAnchor=DateTime.UtcNow.AddSeconds(1);
-                try { var found=await Task.Run(()=>Native.Locate()); if(!closing)anchor=anchorStability.Resolve(found,DateTimeOffset.UtcNow); }
-                catch(Exception) { anchor=anchorStability.Resolve(new Anchor {Window=anchor==null?IntPtr.Zero:anchor.Window,NeedsRecheck=true,Status="Строка ввода недоступна"},DateTimeOffset.UtcNow); }
-                finally { finding=false; }
-            }
-            else if(!finding&&anchor!=null&&anchor.ModelElement!=null) {
-                finding=true;try {var previous=anchor;var found=await Task.Run(()=>Native.Refresh(previous));anchor=anchorStability.Resolve(found,DateTimeOffset.UtcNow);}catch(Exception){anchor=anchorStability.Resolve(new Anchor {Window=anchor==null?IntPtr.Zero:anchor.Window,NeedsRecheck=true},DateTimeOffset.UtcNow);}finally{finding=false;}
-            }
+            if(DateTime.UtcNow>=nextAnchor) {nextAnchor=DateTime.UtcNow.AddMilliseconds(500);tracker.Request();}
+            anchor=tracker.Read();
             if(closing || dragging)return;
             bool ownPopup=details!=null&&!details.IsDisposed&&details.Visible;
             bool ownMenu=menu!=null&&menu.Visible;
@@ -132,10 +126,11 @@ namespace CodexLimits {
                     hasData=Data!=null,remaining=Data==null||Data.MainWindow==null?null:Data.MainWindow.Remaining,updatedAt=Updated,stale=Stale,
                     error=LastError,hostActive=active,visible=BadgeVisible,exact=anchor!=null&&anchor.Exact,anchor=anchor==null?null:anchor.Status,bounds=Bounds,
                     transparent=true,rendered=LayeredOk,scale=ScaleFactor,dictation=anchor!=null&&anchor.VoiceActive,
-                    shown=shownCount,hidden=hiddenCount,paints=paintCount,focusReturns=focusReturns,window=Handle.ToInt64(),font="Segoe UI Bold"
+                    shown=shownCount,hidden=hiddenCount,paints=paintCount,focusReturns=focusReturns,window=Handle.ToInt64(),font="Segoe UI Bold",
+                    footerElements=anchor==null?0:anchor.Elements,managedBytes=GC.GetTotalMemory(false)
                 })); }catch(IOException) { }
             }
-            if(paused || anchor==null || anchor.Bounds.IsEmpty || Native.IsIconic(anchor.Window) || !active) { HideBadge();if(anchor!=null&&anchor.VoiceActive&&details!=null)details.Hide(); return; }
+            if(anchor==null || anchor.Bounds.IsEmpty || !Placement.ShowForHost(anchor.Window.ToInt64(),Native.IsIconic(anchor.Window),paused,anchor.VoiceActive)) { HideBadge();if(anchor!=null&&anchor.VoiceActive&&details!=null)details.Hide(); return; }
             var target=anchor.Bounds;
             Native.RECT current;
             if(Native.GetWindowRect(anchor.Window,out current)) target.Offset(current.Left-anchor.HostBounds.Left,current.Top-anchor.HostBounds.Top);
@@ -147,7 +142,8 @@ namespace CodexLimits {
             if(owner!=anchor.Window){Native.SetWindowLongPtr(Handle,-8,anchor.Window);owner=anchor.Window;}
             if(!BadgeVisible) {
                 // Native visibility avoids Form.Show activation and its focus feedback loop.
-                if(Native.SetWindowPos(Handle,new IntPtr(-1),target.X,target.Y,target.Width,target.Height,0x10|0x40|0x200))shownCount++;
+                IntPtr above=Native.GetWindow(anchor.Window,3); // GW_HWNDPREV: immediately above the owner, below other apps.
+                if(Native.SetWindowPos(Handle,above==Handle?IntPtr.Zero:above,target.X,target.Y,target.Width,target.Height,0x10|0x40|0x200|(above==Handle?0x4u:0)))shownCount++;
             }
             RepaintBadge();
             RestoreHostFocus();
