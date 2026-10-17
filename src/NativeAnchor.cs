@@ -25,6 +25,8 @@ namespace CodexLimits {
         [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out RECT rect);
         [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
         [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+        [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window,IntPtr after,int x,int y,int width,int height,uint flags);
+        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
         [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
         [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
         [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr window,uint flags);
@@ -58,14 +60,15 @@ namespace CodexLimits {
         public static Anchor Refresh(Anchor previous) {
             var anchor=previous.Copy();anchor.Bounds=Rectangle.Empty;
             try {
-                if(anchor.ModelElement==null||anchor.PermissionElement==null)return anchor;
+                if(anchor.ModelElement==null||anchor.PermissionElement==null){anchor.Status="refresh: missing references";return anchor;}
                 var left=anchor.PermissionElement.Current;var right=anchor.ModelElement.Current;
-                if(left.IsOffscreen||right.IsOffscreen||!IsPermission(left.Name)||!IsModel(right.Name))return anchor;
+                if(left.IsOffscreen||right.IsOffscreen){anchor.Status="refresh: offscreen";return anchor;}
+                if(!IsPermission(left.Name)||!IsModel(right.Name)){anchor.Status="refresh: changed names";return anchor;}
                 anchor.LeftReference=ToRectangle(left.BoundingRectangle);anchor.RightReference=ToRectangle(right.BoundingRectangle);
                 anchor.Scale=Placement.InferScale(anchor.RightReference.Height,anchor.TextReference,GetDpiForWindow(anchor.Window)/96d);
                 anchor.Bounds=Placement.VisibleBadge(anchor.LeftReference,anchor.RightReference,anchor.Scale,anchor.VoiceActive);
                 RECT rect;if(GetWindowRect(anchor.Window,out rect))anchor.HostBounds=rect.Rectangle;
-            }catch(ElementNotAvailableException) {}catch(COMException) {}catch(InvalidOperationException) {}
+            }catch(ElementNotAvailableException) {anchor.Status="refresh: element unavailable";}catch(COMException e) {anchor.Status="refresh: COM "+e.ErrorCode;}catch(InvalidOperationException e) {anchor.Status="refresh: "+e.Message;}
             return anchor;
         }
         public static Anchor Locate() {

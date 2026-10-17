@@ -43,6 +43,11 @@ class ModelTests {
         Test("UI zoom scales text from model label rather than OS DPI", delegate {Equal(Placement.InferScale(34,true,1),2d);Equal(Placement.InferScale(17,true,2),1d);});
         Test("unknown text height uses display DPI", delegate {Equal(Placement.InferScale(0,true,1.25),1.25d);});
         Test("200 percent zoom badge fits scaled footer gap", delegate {var r=Placement.VisibleBadge(new Rectangle(60,200,240,64),new Rectangle(930,200,360,64),2,false);Equal(r.Height,52);Equal(r.Left>=316&&r.Right<=914,true);});
+        Test("temporary focus on badge never creates hide-show oscillation",delegate {
+            foreach(long foreground in new long[]{266218,1906112,266218,1906112,266218})Equal(Placement.HostContext(foreground,266218,1906112,false,false),true);
+        });
+        Test("switching to another app still hides the badge",delegate {Equal(Placement.HostContext(999,266218,1906112,false,false),false);});
+        Test("missing host never authorizes showing badge",delegate {Equal(Placement.HostContext(1906112,0,1906112,true,true),false);});
         Console.WriteLine(count + " checks, " + failures + " failures");
         Environment.ExitCode = failures == 0 ? 0 : 1;
     }

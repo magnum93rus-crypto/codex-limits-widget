@@ -109,6 +109,9 @@ namespace CodexLimits {
         }
     }
     public static class Placement {
+        public static bool HostContext(long foreground,long host,long badge,bool popup,bool menu) {
+            return host!=0&&(foreground==host||foreground==badge||popup||menu);
+        }
         public static double InferScale(int referenceHeight,bool text,double dpiScale) {
             if(referenceHeight<=0)return dpiScale;
             return Math.Max(.5,Math.Min(3.5,referenceHeight/(text?17d:28d)));

@@ -20,7 +20,7 @@ namespace CodexLimits {
         }
         public static Color QuotaColor(double? percent) { return !percent.HasValue ? Muted : percent<=10 ? Red : percent<=25 ? Amber : Green; }
         public static void InlineText(Graphics g,string text,float size,Rectangle bounds) {
-            using(var font=new Font("Segoe UI Semibold",size,FontStyle.Regular,GraphicsUnit.Pixel))
+            using(var font=new Font("Segoe UI",size,FontStyle.Bold,GraphicsUnit.Pixel))
             using(var brush=new SolidBrush(Text))
             using(var format=new StringFormat(StringFormat.GenericTypographic) {LineAlignment=StringAlignment.Center,Trimming=StringTrimming.EllipsisCharacter,FormatFlags=StringFormatFlags.NoWrap})
                 g.DrawString(text,font,brush,bounds,format);
@@ -56,10 +56,23 @@ namespace CodexLimits {
         DateTime nextStatus=DateTime.MinValue;
         public double ScaleFactor=1;
         public bool LayeredOk;
+        int shownCount,hiddenCount,paintCount,focusReturns;
+        string paintKey;
+        IntPtr owner;
+        bool BadgeVisible {get{return IsHandleCreated&&Native.IsWindowVisible(Handle);}}
         public bool Stale { get { return LastError!=null || (Updated.HasValue && DateTimeOffset.UtcNow-Updated.Value>TimeSpan.FromMinutes(3)); } }
         protected override bool ShowWithoutActivation { get { return true; } }
         protected override CreateParams CreateParams { get { var p=base.CreateParams; p.ExStyle |= 0x08000000|0x80|(preview?0:0x80000); return p; } }
         protected override void WndProc(ref Message m) { if (m.Msg==0x21) { m.Result=new IntPtr(3); return; } base.WndProc(ref m); }
+        protected override void OnActivated(EventArgs e) {
+            base.OnActivated(e);
+            if(!preview&&IsHandleCreated&&!closing)BeginInvoke((Action)RestoreHostFocus);
+        }
+        void RestoreHostFocus() {
+            // A collapsed indicator must never retain keyboard focus after a framework activation.
+            if(anchor!=null&&anchor.Window!=IntPtr.Zero&&Native.GetForegroundWindow()==Handle&&!Native.IsIconic(anchor.Window))
+                if(Native.SetForegroundWindow(anchor.Window))focusReturns++;
+        }
         public Widget(bool previewMode) {
             preview=previewMode; settings=WidgetSettings.Load();
             FormBorderStyle=FormBorderStyle.None; ShowInTaskbar=false; TopMost=true; StartPosition=FormStartPosition.Manual;
@@ -111,16 +124,17 @@ namespace CodexLimits {
             bool ownPopup=details!=null&&!details.IsDisposed&&details.Visible;
             bool ownMenu=menu!=null&&menu.Visible;
             IntPtr foreground=Native.GetAncestor(Native.GetForegroundWindow(),2);
-            bool active=anchor!=null && anchor.Window!=IntPtr.Zero && foreground==anchor.Window;
+            bool active=anchor!=null&&Placement.HostContext(foreground.ToInt64(),anchor.Window.ToInt64(),Handle.ToInt64(),ownPopup,ownMenu);
             if(DateTime.UtcNow>=nextStatus) {
                 nextStatus=DateTime.UtcNow.AddSeconds(10);
                 try { File.WriteAllText(Path.Combine(Program.DataDirectory,"status.json"),Json.Serializer.Serialize(new {
                     hasData=Data!=null,remaining=Data==null||Data.MainWindow==null?null:Data.MainWindow.Remaining,updatedAt=Updated,stale=Stale,
-                    error=LastError,hostActive=active,visible=Visible,exact=anchor!=null&&anchor.Exact,anchor=anchor==null?null:anchor.Status,bounds=Bounds,
-                    transparent=true,rendered=LayeredOk,scale=ScaleFactor,dictation=anchor!=null&&anchor.VoiceActive
+                    error=LastError,hostActive=active,visible=BadgeVisible,exact=anchor!=null&&anchor.Exact,anchor=anchor==null?null:anchor.Status,bounds=Bounds,
+                    transparent=true,rendered=LayeredOk,scale=ScaleFactor,dictation=anchor!=null&&anchor.VoiceActive,
+                    shown=shownCount,hidden=hiddenCount,paints=paintCount,focusReturns=focusReturns,window=Handle.ToInt64(),font="Segoe UI Bold"
                 })); }catch(IOException) { }
             }
-            if(paused || anchor==null || anchor.Bounds.IsEmpty || Native.IsIconic(anchor.Window) || (!active&&!ownPopup&&!ownMenu)) { Hide();if(anchor!=null&&anchor.VoiceActive&&details!=null)details.Hide(); return; }
+            if(paused || anchor==null || anchor.Bounds.IsEmpty || Native.IsIconic(anchor.Window) || !active) { HideBadge();if(anchor!=null&&anchor.VoiceActive&&details!=null)details.Hide(); return; }
             var target=anchor.Bounds;
             Native.RECT current;
             if(Native.GetWindowRect(anchor.Window,out current)) target.Offset(current.Left-anchor.HostBounds.Left,current.Top-anchor.HostBounds.Top);
@@ -128,10 +142,18 @@ namespace CodexLimits {
             bool scaleChanged=Math.Abs(ScaleFactor-anchor.Scale)>.01;
             bool boundsChanged=Bounds!=target;
             ScaleFactor=anchor.Scale;
-            Bounds=target;
-            if(!Visible) { Native.SetWindowLongPtr(Handle,-8,anchor.Window); Show(); }
+            if(boundsChanged)Bounds=target;
+            if(owner!=anchor.Window){Native.SetWindowLongPtr(Handle,-8,anchor.Window);owner=anchor.Window;}
+            if(!BadgeVisible) {
+                // Native visibility avoids Form.Show activation and its focus feedback loop.
+                if(Native.SetWindowPos(Handle,new IntPtr(-1),target.X,target.Y,target.Width,target.Height,0x10|0x40|0x200))shownCount++;
+            }
             RepaintBadge();
+            RestoreHostFocus();
             if(details!=null&&!details.IsDisposed&&details.Visible&&(scaleChanged||boundsChanged)) {details.RefreshView();PositionDetails();}
+        }
+        void HideBadge() {
+            if(BadgeVisible&&Native.SetWindowPos(Handle,IntPtr.Zero,0,0,0,0,0x1|0x2|0x4|0x10|0x80))hiddenCount++;
         }
         public async void RefreshLimits() {
             if(refreshing || closing || preview)return;
@@ -155,8 +177,8 @@ namespace CodexLimits {
             PositionDetails();details.Show(); details.Activate();
         }
         void PositionDetails() {
-            Rectangle screen=Screen.FromPoint(Visible?Location:Cursor.Position).WorkingArea;
-            Point origin=Visible?new Point(Left,Top-details.Height-8):new Point(Cursor.Position.X-details.Width,Cursor.Position.Y-details.Height);
+            Rectangle screen=Screen.FromPoint(BadgeVisible?Location:Cursor.Position).WorkingArea;
+            Point origin=BadgeVisible?new Point(Left,Top-details.Height-8):new Point(Cursor.Position.X-details.Width,Cursor.Position.Y-details.Height);
             details.Location=new Point(Math.Max(screen.Left,Math.Min(screen.Right-details.Width,origin.X)),Math.Max(screen.Top,Math.Min(screen.Bottom-details.Height,origin.Y)));
         }
         protected override void OnPaintBackground(PaintEventArgs e) {if(preview)base.OnPaintBackground(e);}
@@ -170,7 +192,18 @@ namespace CodexLimits {
         void RepaintBadge() {
             if(preview){Invalidate();return;}
             if(!IsHandleCreated||closing)return;
+            var quota=Data==null?null:Data.MainWindow;
+            string nextKey=Width+"|"+Height+"|"+ScaleFactor+"|"+BadgeText()+"|"+Stale+"|"+(quota==null?null:quota.Remaining);
+            if(LayeredOk&&paintKey==nextKey)return;
             using(var bitmap=RenderBadge())LayeredOk=LayeredWindow.Present(Handle,bitmap,Location);
+            if(LayeredOk){paintKey=nextKey;paintCount++;}
+        }
+        string BadgeText() {
+            var quota=Data==null?null:Data.MainWindow;double s=ScaleFactor;
+            string text=Data==null?(LastError==null?"Лимиты · загрузка…":"Лимиты · нет связи"):quota==null?"Лимиты · нет данных":
+                (Stale?"~":"")+quota.Label+" "+quota.Percent+"  ·  "+(Width>240*s?"сброс ":"")+quota.Countdown(DateTimeOffset.UtcNow);
+            if(Data!=null&&(Data.UsageAllowed==false||(Data.Main!=null&&Data.Main.Blocked)))text="Лимит доступа достигнут";
+            return text;
         }
         void DrawBadge(Graphics g) {
             g.SmoothingMode=SmoothingMode.AntiAlias;g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
@@ -179,10 +212,7 @@ namespace CodexLimits {
             int d=(int)(12*s),x=(int)(9*s),y=(Height-d)/2;
             using(var pen=new Pen(Color.FromArgb(130,130,130),(float)(2*s)))g.DrawEllipse(pen,x,y,d,d);
             if(quota!=null&&quota.Remaining.HasValue)using(var pen=new Pen(accent,(float)(2*s)))g.DrawArc(pen,x,y,d,d,-90,(float)(3.6*quota.Remaining.Value));
-            string text=Data==null?(LastError==null?"Лимиты · загрузка…":"Лимиты · нет связи"):quota==null?"Лимиты · нет данных":
-                (Stale?"~":"")+quota.Label+" "+quota.Percent+"  ·  "+(Width>240*s?"сброс ":"")+quota.Countdown(DateTimeOffset.UtcNow);
-            if(Data!=null&&(Data.UsageAllowed==false||(Data.Main!=null&&Data.Main.Blocked)))text="Лимит доступа достигнут";
-            Theme.InlineText(g,text,(float)(12*s),new Rectangle(x+d+(int)(8*s),0,Width-x-d-(int)(14*s),Height));
+            Theme.InlineText(g,BadgeText(),(float)(12*s),new Rectangle(x+d+(int)(8*s),0,Width-x-d-(int)(14*s),Height));
         }
     }
     sealed class DetailCanvas : Control {
